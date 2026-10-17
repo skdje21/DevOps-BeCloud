@@ -1,0 +1,167 @@
+---
+- name: Deploy DevOps Test Application
+  hosts: devops
+  become: true
+  vars:
+    project_dir: /home/devops/devops-test
+
+  tasks:
+    # --- Копирование проекта на ВМ ---
+    - name: Create project directory
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: devops
+        group: devops
+
+    - name: Copy project files to VM
+      become: false
+      synchronize:
+        src: "{{ playbook_dir }}/../"
+        dest: "{{ project_dir }}"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=.vagrant"
+          - "--exclude=node_modules"
+
+    # --- Установка Docker на чистую Ubuntu ---
+    - name: Install required packages
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Add Docker GPG key
+      shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+      args:
+        creates: /etc/apt/keyrings/docker.asc
+
+    - name: Add Docker repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Add devops user to docker group
+      user:
+        name: devops
+        groups: docker
+        append: true
+
+    # --- Предзагрузка образов ---
+    - name: Check if base images exist on VM
+      command: docker images -q postgres:15-alpine
+      register: pg_image
+      changed_when: false
+
+    - name: Check if Docker is available on control machine
+      delegate_to: localhost
+      become: false
+      command: docker info
+      register: local_docker
+      ignore_errors: true
+      changed_when: false
+      when: pg_image.stdout == ""
+
+    - name: Save Docker images on control machine
+      delegate_to: localhost
+      become: false
+      shell: docker save nginx:alpine node:18-alpine postgres:15-alpine -o /tmp/docker-images.tar
+      when: pg_image.stdout == "" and local_docker.rc == 0
+
+    - name: Copy Docker images to VM
+      become: false
+      copy:
+        src: /tmp/docker-images.tar
+        dest: /tmp/docker-images.tar
+      when: pg_image.stdout == "" and local_docker.rc == 0
+
+    - name: Load Docker images on VM
+      command: docker load -i /tmp/docker-images.tar
+      when: pg_image.stdout == "" and local_docker.rc == 0
+
+    - name: Cleanup images archive on VM
+      file:
+        path: /tmp/docker-images.tar
+        state: absent
+      when: pg_image.stdout == "" and local_docker.rc == 0
+
+    - name: Pull images directly if no local Docker
+      command: "docker pull {{ item }}"
+      loop:
+        - nginx:alpine
+        - node:18-alpine
+        - postgres:15-alpine
+      when: pg_image.stdout == "" and local_docker.rc != 0
+      retries: 3
+      delay: 5
+
+    # --- Деплой приложения ---
+    - name: Build and start services
+      command: docker compose up -d --build
+      args:
+        chdir: "{{ project_dir }}"
+      register: compose_up
+
+    - name: Show compose output
+      debug:
+        msg: "{{ compose_up.stderr_lines }}"
+
+    - name: Wait for services to be healthy
+      command: docker compose ps
+      args:
+        chdir: "{{ project_dir }}"
+      register: compose_ps
+      retries: 10
+      delay: 5
+      until: "'unhealthy' not in compose_ps.stdout"
+      changed_when: false
+
+    - name: Verify API health endpoint
+      uri:
+        url: http://localhost:8080/api/health
+        return_content: true
+      register: health_check
+      retries: 5
+      delay: 3
+      until: health_check.status == 200
+
+    - name: Display health check result
+      debug:
+        msg: "{{ health_check.json }}"
+
+    - name: Verify visits endpoint
+      uri:
+        url: http://localhost:8080/api/visits
+        return_content: true
+      register: visits_check
+
+    - name: Display visits result
+      debug:
+        msg: "{{ visits_check.json }}"
+
+    - name: All services are running
+      debug:
+        msg: "Deployment complete! App available at http://192.168.64.2:8080"

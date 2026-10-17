@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Test App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            text-align: center;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            border: none;
+            background: #4CAF50;
+            color: white;
+            border-radius: 4px;
+        }
+        #result { margin-top: 15px; color: #333; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>DevOps Test App</h1>
+        <p>nginx → frontend + backend → PostgreSQL</p>
+    </div>
+    <div class="card">
+        <h2>Health Check</h2>
+        <button onclick="checkHealth()">Check API</button>
+        <p id="health"></p>
+    </div>
+    <div class="card">
+        <h2>Visit Counter</h2>
+        <button onclick="countVisit()">Count Visit</button>
+        <p id="result"></p>
+    </div>
+    <script>
+        async function checkHealth() {
+            try {
+                const res = await fetch('/api/health');
+                const data = await res.json();
+                document.getElementById('health').textContent =
+                    'Status: ' + data.status + ' | DB time: ' + data.db_time;
+            } catch (e) {
+                document.getElementById('health').textContent = 'Error: ' + e.message;
+            }
+        }
+
+        async function countVisit() {
+            try {
+                const res = await fetch('/api/visits');
+                const data = await res.json();
+                document.getElementById('result').textContent =
+                    'Total visits: ' + data.total_visits;
+            } catch (e) {
+                document.getElementById('result').textContent = 'Error: ' + e.message;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+---
+- name: Basic Security Hardening for VM
+  hosts: devops
+  become: true
+  vars:
+    ssh_port: 22
+
+  tasks:
+    # --- UFW Firewall ---
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Set UFW default deny incoming
+      ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Set UFW default allow outgoing
+      ufw:
+        direction: outgoing
+        policy: allow
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: "{{ ssh_port }}"
+        proto: tcp
+
+    - name: Allow HTTP (app port)
+      ufw:
+        rule: allow
+        port: "8080"
+        proto: tcp
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    # --- SSH Hardening ---
+    - name: Disable root login via SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
+      notify: Restart SSH
+
+    - name: Disable password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PasswordAuthentication"
+        line: "PasswordAuthentication no"
+      notify: Restart SSH
+
+    - name: Set MaxAuthTries
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?MaxAuthTries"
+        line: "MaxAuthTries 3"
+      notify: Restart SSH
+
+    # --- Fail2Ban ---
+    - name: Install fail2ban
+      apt:
+        name: fail2ban
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Configure fail2ban for SSH
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+          port = {{ ssh_port }}
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+          findtime = 600
+      notify: Restart fail2ban
+
+    # --- System updates ---
+    - name: Install unattended-upgrades
+      apt:
+        name: unattended-upgrades
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Enable automatic security updates
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+      when: ansible_os_family == "Debian"
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
+
+    - name: Restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
